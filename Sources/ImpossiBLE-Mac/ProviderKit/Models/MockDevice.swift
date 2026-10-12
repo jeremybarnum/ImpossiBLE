@@ -155,6 +155,7 @@ enum StockConfigurations {
         deviceInfoPeripheral,
         multiServiceSensor,
         denseSensorEnvironment,
+        ltSupportLabEnvironment,
     ]
 
     static let heartRateMonitor = MockConfiguration(
@@ -664,6 +665,79 @@ enum StockConfigurations {
                         MockCharacteristic(uuid: "2A19", properties: 0x02, value: Data([0x1E])), // 30 %
                     ]),
                 ]
+            ),
+        ],
+        isBuiltIn: true
+    )
+
+    // MARK: - LTSupport Lab Environment
+
+    // Recreated from the devices the LTSupportBluetooth simulator stub used to inject
+    // before ImpossiBLE made that stub obsolete, so the test environment survives.
+    // The stub advertised random payload bytes; fixed values replace them here.
+    static let ltSupportLabEnvironment = MockConfiguration(
+        name: "LTSupport Lab Environment",
+        devices: [
+            // 1 — Research sensor with a rich GATT tree; the stub exposed every
+            // service as secondary, a quirk worth keeping around as a test case.
+            MockDevice(
+                name: "Amethyst Sensor Crystal",
+                rssi: -60,
+                isConnectable: true,
+                isEnabled: true,
+                advertisedServiceUUIDs: ["1815", "181A", "1822", "72F055E4-B959-40BB-A80B-09B9294D7D6E"],
+                manufacturerData: Data("Amethyst".utf8),
+                services: [
+                    MockService(uuid: "180A", isPrimary: false, characteristics: [
+                        MockCharacteristic(uuid: "2A24", properties: 0x02, value: "Sensor Head XE".data(using: .utf8)),
+                        MockCharacteristic(uuid: "2A29", properties: 0x02, value: "Dr. Lauer Research".data(using: .utf8)),
+                        MockCharacteristic(uuid: "2A25", properties: 0x02, value: "0.9.42.0".data(using: .utf8)),
+                        MockCharacteristic(uuid: "2A27", properties: 0x02, value: "Rev.3a".data(using: .utf8)),
+                        MockCharacteristic(uuid: "2A26", properties: 0x02, value: "8".data(using: .utf8)),
+                        MockCharacteristic(uuid: "2A28", properties: 0x02, value: "251".data(using: .utf8)),
+                        MockCharacteristic(uuid: "2A50", properties: 0x02, value: Data([0x01, 0x4C, 0x00, 0x63, 0x00, 0x2A, 0x00])), // PnP ID
+                        MockCharacteristic(uuid: "2A2A", properties: 0x02, value: Data(repeating: 0x00, count: 20)), // Regulatory Certification Data List
+                    ]),
+                    MockService(uuid: "1815", isPrimary: false, characteristics: []),
+                    MockService(uuid: "181A", isPrimary: false, characteristics: []),
+                    MockService(uuid: "1822", isPrimary: false, characteristics: []),
+                    MockService(uuid: "72F055E4-B959-40BB-A80B-09B9294D7D6E", isPrimary: false, characteristics: [
+                        MockCharacteristic(
+                            uuid: "2ABE", properties: 0x02,
+                            value: "Core Calibration Tower A".data(using: .utf8),
+                            descriptors: [
+                                MockDescriptor(uuid: "2902", value: Data([0x00, 0x00])),
+                                MockDescriptor(uuid: "2901", value: "Temperature Offset (F)".data(using: .utf8)),
+                                MockDescriptor(uuid: "2905", value: Data(repeating: 0x00, count: 16)), // Aggregate Format
+                            ]
+                        ),
+                        MockCharacteristic(uuid: "2AC3", properties: 0x02, value: "183/10/29182/26".data(using: .utf8)),
+                        MockCharacteristic(uuid: "2AC2", properties: 0x12, value: "1543668206".data(using: .utf8)),
+                        MockCharacteristic(uuid: "2AC6", properties: 0x0C, value: nil), // write + write without response
+                    ]),
+                ]
+            ),
+            // 2 — iPhone-lookalike with a minimal Device Information service
+            MockDevice(
+                name: "MyPhone XS MAX",
+                rssi: -64,
+                isConnectable: true,
+                isEnabled: true,
+                services: [
+                    MockService(uuid: "180A", isPrimary: false, characteristics: [
+                        MockCharacteristic(uuid: "2A24", properties: 0x02, value: "iPhone11,3".data(using: .utf8)),
+                        MockCharacteristic(uuid: "2A29", properties: 0x02, value: "Apple Inc.".data(using: .utf8)),
+                    ]),
+                ]
+            ),
+            // 3 — Non-connectable beacon
+            MockDevice(
+                name: "I bims, ein Beacon",
+                rssi: -80,
+                isConnectable: false,
+                isEnabled: true,
+                manufacturerData: Data("beacon01".utf8),
+                services: []
             ),
         ],
         isBuiltIn: true

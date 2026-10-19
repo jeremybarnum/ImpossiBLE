@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "ImpossiBLE",
-    platforms: [.iOS(.v14)],
+    platforms: [.iOS(.v14), .watchOS(.v7)],
     products: [
         .library(
             name: "ImpossiBLE",

@@ -988,20 +988,21 @@ static void cbs_handle_message(NSDictionary *msg) {
                 [delegate centralManager:central didConnectPeripheral:cbPeripheral];
             } else if ([type isEqualToString:@"didFailConnect"] &&
                        [delegate respondsToSelector:@selector(centralManager:didFailToConnectPeripheral:error:)]) {
-                [delegate centralManager:central didFailToConnectPeripheral:cbPeripheral error:err];
+                // Forgotten before the app hears, so a connect it makes in the callback keeps its owner.
                 [gPeripheralOwners removeObjectForKey:uuid];
+                [delegate centralManager:central didFailToConnectPeripheral:cbPeripheral error:err];
             } else if ([type isEqualToString:@"didDisconnect"] &&
                        [delegate respondsToSelector:@selector(centralManager:didDisconnectPeripheral:timestamp:isReconnecting:error:)]) {
+                [gPeripheralOwners removeObjectForKey:uuid];
                 [delegate centralManager:central
                    didDisconnectPeripheral:cbPeripheral
                                 timestamp:timestamp
                            isReconnecting:isReconnecting
                                     error:err];
-                [gPeripheralOwners removeObjectForKey:uuid];
             } else if ([type isEqualToString:@"didDisconnect"] &&
                        [delegate respondsToSelector:@selector(centralManager:didDisconnectPeripheral:error:)]) {
-                [delegate centralManager:central didDisconnectPeripheral:cbPeripheral error:err];
                 [gPeripheralOwners removeObjectForKey:uuid];
+                [delegate centralManager:central didDisconnectPeripheral:cbPeripheral error:err];
             }
         });
         return;

@@ -18,6 +18,7 @@ static void *kCBSIsScanningKey = &kCBSIsScanningKey;
 static void *kCBSScanServiceFilterKey = &kCBSScanServiceFilterKey;
 static void *kCBSScanWireOptionsKey = &kCBSScanWireOptionsKey;
 static void *kCBSCentralKeyKey = &kCBSCentralKeyKey;
+static void *kCBSInitialStateReportedKey = &kCBSInitialStateReportedKey;
 static CBCentralManager *cbs_owner_central_for_peripheral(NSUUID *identifier);
 static NSArray<CBSPeripheral *> *cbs_all_peripherals_for_uuid(NSUUID *uuid);
 static uint64_t gNextCentralId = 1;
@@ -41,6 +42,10 @@ static NSMutableDictionary<NSString *, NSNumber *> *gL2CAPFds;
 static void cbs_notify_all_centrals_state_changed(void) {
     NSArray *centrals = gCentrals.allObjects;
     for (CBCentralManager *central in centrals) {
+        if (!objc_getAssociatedObject(central, kCBSInitialStateReportedKey)) {
+            // Its initial report, still queued, carries the new state.
+            continue;
+        }
         id delegate = central.delegate;
         if (delegate && [delegate respondsToSelector:@selector(centralManagerDidUpdateState:)]) {
             dispatch_queue_t q = objc_getAssociatedObject(central, kCBSDelegateQueueKey);
@@ -214,6 +219,27 @@ static NSArray<CBSPeripheral *> *cbs_all_peripherals_for_uuid(NSUUID *uuid) {
         }
     }
     return matches;
+}
+
+// iOS remembers the peripherals it has seen across launches, and
+// retrievePeripheralsWithIdentifiers: returns them to a relaunched app.
+static NSString *const kCBSKnownPeripheralsKey = @"ImpossiBLE.knownPeripherals";
+
+static void cbs_remember_peripheral(NSUUID *uuid, NSString *name) {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSDictionary *known = [defaults dictionaryForKey:kCBSKnownPeripheralsKey] ?: @{};
+    NSString *value = name ?: @"";
+    if ([known[uuid.UUIDString] isEqual:value] || (value.length == 0 && known[uuid.UUIDString])) {
+        return;
+    }
+    NSMutableDictionary *updated = [known mutableCopy];
+    updated[uuid.UUIDString] = value;
+    [defaults setObject:updated forKey:kCBSKnownPeripheralsKey];
+}
+
+static NSString *cbs_known_peripheral_name(NSUUID *uuid) {
+    id name = [[NSUserDefaults standardUserDefaults] dictionaryForKey:kCBSKnownPeripheralsKey][uuid.UUIDString];
+    return [name isKindOfClass:[NSString class]] ? name : nil;
 }
 
 static CBSPeripheral *cbs_any_peripheral_for_uuid(NSUUID *uuid) {
@@ -435,20 +461,40 @@ static void cbs_l2cap_setup_read(NSString *chanId, int fd) {
     gL2CAPFds[chanId] = @(fd);
 }
 
+// CoreBluetooth treats a 16- or 32-bit UUID and its 128-bit form on the
+// Bluetooth base UUID as equal; comparing strings must too.
+static NSString *cbs_canonical_uuid_string(id item) {
+    CBUUID *uuid = nil;
+    if ([item isKindOfClass:[CBUUID class]]) {
+        uuid = item;
+    } else if ([item isKindOfClass:[NSString class]] && [item length] > 0) {
+        @try {
+            uuid = [CBUUID UUIDWithString:item];
+        } @catch (NSException *e) {
+            return [(NSString *)item uppercaseString];
+        }
+    }
+    NSData *data = uuid.data;
+    if (data.length == 2 || data.length == 4) {
+        const uint8_t *b = data.bytes;
+        uint32_t value = 0;
+        for (NSUInteger i = 0; i < data.length; i++) {
+            value = value << 8 | b[i];
+        }
+        return [NSString stringWithFormat:@"%08X-0000-1000-8000-00805F9B34FB", value];
+    }
+    return uuid.UUIDString.uppercaseString;
+}
+
 static NSSet<NSString *> *cbs_normalized_uuid_string_set(NSArray *uuids) {
     NSMutableSet<NSString *> *out = [NSMutableSet set];
     if (![uuids isKindOfClass:[NSArray class]]) {
         return out;
     }
     for (id item in uuids) {
-        NSString *uuidString = nil;
-        if ([item isKindOfClass:[CBUUID class]]) {
-            uuidString = ((CBUUID *)item).UUIDString;
-        } else if ([item isKindOfClass:[NSString class]]) {
-            uuidString = (NSString *)item;
-        }
+        NSString *uuidString = cbs_canonical_uuid_string(item);
         if (uuidString.length > 0) {
-            [out addObject:uuidString.uppercaseString];
+            [out addObject:uuidString];
         }
     }
     return out;
@@ -498,7 +544,7 @@ static BOOL cbs_central_should_receive_discovery(CBCentralManager *central, CBSP
     NSArray *services = peripheral.services;
     for (id service in services) {
         CBUUID *uuid = [service respondsToSelector:@selector(UUID)] ? [service UUID] : nil;
-        NSString *uuidString = [uuid.UUIDString uppercaseString];
+        NSString *uuidString = cbs_canonical_uuid_string(uuid);
         if (uuidString.length > 0 && [wanted containsObject:uuidString]) {
             return YES;
         }
@@ -602,7 +648,7 @@ static BOOL cbs_peripheral_matches_service_filter(CBSPeripheral *peripheral, NSS
     NSArray *services = [peripheral services];
     for (id service in services) {
         CBUUID *uuid = [service respondsToSelector:@selector(UUID)] ? [service UUID] : nil;
-        NSString *uuidString = [uuid.UUIDString uppercaseString];
+        NSString *uuidString = cbs_canonical_uuid_string(uuid);
         if (uuidString.length > 0 && [wantedServices containsObject:uuidString]) {
             return YES;
         }
@@ -786,6 +832,7 @@ static void cbs_handle_message(NSDictionary *msg) {
         if (!uuid) {
             return;
         }
+        cbs_remember_peripheral(uuid, name);
         if (!gAdvertisedServices) {
             gAdvertisedServices = [NSMutableDictionary dictionary];
         }
@@ -1629,7 +1676,12 @@ static void cbs_ensure_connection_open(void) {
 }
 
 static void cbs_post_init(id obj, id delegate, dispatch_queue_t queue) {
-    cbs_ensure_connection_open();
+    // The shorter initializers call the longer one, and both are swizzled.
+    if (objc_getAssociatedObject(obj, kCBSDelegateQueueKey)) {
+        return;
+    }
+    // Record the central before the socket opens: the provider may answer
+    // hello at once, and the connection coming up notifies registered centrals.
     dispatch_queue_t q = queue ?: dispatch_get_main_queue();
     objc_setAssociatedObject(obj, kCBSDelegateQueueKey, q, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(obj, kCBSIsScanningKey, @NO, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -1637,11 +1689,23 @@ static void cbs_post_init(id obj, id delegate, dispatch_queue_t queue) {
     objc_setAssociatedObject(obj, kCBSScanWireOptionsKey, @{}, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     gCentral = obj;
     cbs_register_central((CBCentralManager *)obj);
-    if (delegate && [delegate respondsToSelector:@selector(centralManagerDidUpdateState:)]) {
-        dispatch_async(q, ^{
-            [delegate centralManagerDidUpdateState:obj];
-        });
-    }
+    cbs_ensure_connection_open();
+
+    // Like CoreBluetooth, report the initial state once, when it is known:
+    // after the open in flight has connected or failed.
+    __weak CBCentralManager *weakCentral = obj;
+    CBSConnectionAfterPendingOpen(^{
+        CBCentralManager *central = weakCentral;
+        if (!central) {
+            return;
+        }
+        objc_setAssociatedObject(central, kCBSInitialStateReportedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if (delegate && [delegate respondsToSelector:@selector(centralManagerDidUpdateState:)]) {
+            dispatch_async(q, ^{
+                [delegate centralManagerDidUpdateState:central];
+            });
+        }
+    });
 }
 
 static id (*orig_init)(id, SEL, id, dispatch_queue_t, NSDictionary *);
@@ -1692,7 +1756,9 @@ static void cbs_setDelegate(id self, SEL _cmd, id delegate) {
     cbs_register_central((CBCentralManager *)self);
     dispatch_queue_t q = objc_getAssociatedObject(self, kCBSDelegateQueueKey);
     if (!q) {
-        q = dispatch_get_main_queue();
+        // Called from inside -initWithDelegate:queue:options:, before the
+        // central's queue is known; cbs_post_init reports the state on it.
+        return;
     }
     if (delegate && [delegate respondsToSelector:@selector(centralManagerDidUpdateState:)]) {
         dispatch_async(q, ^{
@@ -1848,10 +1914,14 @@ static NSArray *cbs_retrieve_peripherals(id self, SEL _cmd, NSArray *identifiers
             CBSPeripheral *peripheral = store[uuid];
             if (!peripheral) {
                 CBSPeripheral *source = cbs_any_peripheral_for_uuid(uuid);
+                NSString *knownName = cbs_known_peripheral_name(uuid);
                 if (source) {
                     peripheral = [[CBSPeripheral alloc] initWithIdentifier:uuid name:source.name ?: @""];
                     [peripheral cbs_setState:source.state];
                     peripheral.services = source.services ?: @[];
+                    store[uuid] = peripheral;
+                } else if (knownName) {
+                    peripheral = [[CBSPeripheral alloc] initWithIdentifier:uuid name:knownName];
                     store[uuid] = peripheral;
                 }
             }

@@ -22,6 +22,11 @@ static NSArray<NSString *> *cbs_uuid_strings(NSArray<CBUUID *> *uuids) {
 
 #pragma mark - CBSPeripheral
 
+// Every stand-in peripheral, kept for the life of the process. A CBPeripheral's own dealloc
+// expects CoreBluetooth's bookkeeping (it removes an observer CoreBluetooth registered), which a
+// stand-in never had: released, it threw and the app aborted. Peripherals are few and small.
+static NSMutableSet *gPinnedPeripherals;
+
 @implementation CBSPeripheral {
     NSUUID *_shimIdentifier;
     NSString *_shimName;
@@ -38,6 +43,9 @@ static NSArray<NSString *> *cbs_uuid_strings(NSArray<CBUUID *> *uuids) {
         _shimDelegate = nil;
         _shimState = CBPeripheralStateDisconnected;
         _shimServices = nil;
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{ gPinnedPeripherals = [NSMutableSet set]; });
+        @synchronized (gPinnedPeripherals) { [gPinnedPeripherals addObject:self]; }
     }
     return self;
 }

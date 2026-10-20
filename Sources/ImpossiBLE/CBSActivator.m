@@ -1800,6 +1800,11 @@ static void cbs_connect_peripheral(id self, SEL _cmd, id peripheral, NSDictionar
             gPeripheralOwners = [NSMutableDictionary dictionary];
         }
         gPeripheralOwners[uuid] = cbs_central_key(central);
+        // As in CoreBluetooth, a connect not yet made reads as connecting until it goes through or
+        // is cancelled, so an app that cancels pending connects by their state finds this one.
+        if ([peripheral isKindOfClass:[CBSPeripheral class]] && [(CBSPeripheral *)peripheral state] == CBPeripheralStateDisconnected) {
+            [(CBSPeripheral *)peripheral cbs_setState:CBPeripheralStateConnecting];
+        }
         CBSConnectionSend(@{@"type": @"connect", @"id": uuid.UUIDString, @"options": options ?: @{}});
     }
 }
@@ -1819,6 +1824,10 @@ static void cbs_cancel(id self, SEL _cmd, id peripheral) {
             gPeripheralOwners[uuid] = cbs_central_key(central);
         }
         CBSConnectionSend(@{@"type": @"cancel", @"id": uuid.UUIDString});
+        // A cancelled connect that never went through is over at once.
+        if ([peripheral isKindOfClass:[CBSPeripheral class]] && [(CBSPeripheral *)peripheral state] == CBPeripheralStateConnecting) {
+            [(CBSPeripheral *)peripheral cbs_setState:CBPeripheralStateDisconnected];
+        }
     }
 }
 
